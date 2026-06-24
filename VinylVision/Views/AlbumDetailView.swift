@@ -124,13 +124,14 @@ struct AlbumDetailView: View {
 
                     // Action buttons
                     HStack(spacing: 10) {
-                        if let deezerURL = album.deezerURL, let url = URL(string: deezerURL) {
+                        let service = appState.preferredStreamingService
+                        if let url = album.streamingURL(for: service) {
                             Link(destination: url) {
-                                Label("Deezer", systemImage: "music.note.list")
+                                Label(service.displayName, systemImage: service.systemImage)
                                     .font(.caption).fontWeight(.medium)
                                     .foregroundStyle(.white)
                                     .padding(.horizontal, 14).padding(.vertical, 8)
-                                    .background(.orange)
+                                    .background(service.tintColor)
                                     .clipShape(Capsule())
                             }
                         }
@@ -259,14 +260,6 @@ struct AlbumDetailView: View {
         .onDisappear {
             isSpinning = false
         }
-//        .sheet(isPresented: $showSearch) {
-//            AlbumSearchView()
-//                .environment(appState)
-//        }
-        
-        AlbumSearchButton(style: .capsule)
-            .environment(appState)
-            .opacity(infoAppeared ? 1 : 0)
     }
 
     // MARK: - Sizing

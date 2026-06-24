@@ -73,6 +73,7 @@ struct BottomBar: View {
     @Binding var showCamera: Bool
     @Binding var showHistory: Bool
     @State private var showSettings = false
+    @State private var showSearch = false
 
     var body: some View {
         HStack(spacing: 0) {
@@ -97,6 +98,21 @@ struct BottomBar: View {
                         }
                     }
                     Text("History")
+                        .font(.caption2)
+                }
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 10)
+            }
+
+            // Search tab
+            Button {
+                showSearch = true
+            } label: {
+                VStack(spacing: 3) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 22))
+                    Text("Search")
                         .font(.caption2)
                 }
                 .foregroundStyle(.secondary)
@@ -144,6 +160,10 @@ struct BottomBar: View {
         .background(.ultraThinMaterial)
         .overlay(alignment: .top) { Divider() }
         .padding(.bottom, safeAreaBottom)
+        .sheet(isPresented: $showSearch) {
+            AlbumSearchView()
+                .environment(appState)
+        }
         .sheet(isPresented: $showSettings) {
             NavigationStack {
                 SettingsView()
@@ -240,10 +260,6 @@ struct WelcomeView: View {
             .opacity(appeared ? 1 : 0)
             .offset(y: appeared ? 0 : 30)
 
-            AlbumSearchButton(style: .plain)
-                .environment(appState)
-                .padding(.top, 8)
-            
             Spacer()
 
             // History teaser

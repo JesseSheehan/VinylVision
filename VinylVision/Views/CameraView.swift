@@ -56,6 +56,13 @@ struct CameraView: View {
     @State private var cameraKey = UUID()
     @State private var isUltraWide = false
     @State private var triggerLensToggle = false  // ← flipping this triggers the switch
+    @State private var showLowConfidence = false
+    @State private var lowConfidenceAlbum: Album?
+    @State private var lowConfidenceOCRLines: [String] = []
+
+    /// Below this music-confidence score, we surface the album but warn the user
+    /// the match may be wrong and suggest using the Search tab instead.
+    private let lowConfidenceThreshold: Double = 0.5
 
     var body: some View {
         ZStack {
@@ -74,36 +81,17 @@ struct CameraView: View {
 
             VStack {
                 HStack {
-                        Button { dismiss() } label: {
-                            Image(systemName: "xmark.circle.fill")
-                                .font(.system(size: 28))
-                                .foregroundStyle(.white)
-                                .shadow(color: .black.opacity(0.5), radius: 4)
-                        }
-                        .padding(.leading, 20)
-                        .padding(.top, 20)
-
-                        Spacer()
-                    
-                        if AVCaptureDevice.default(.builtInUltraWideCamera, for: .video, position: .back) != nil {
-                           
-                            // ← Add this lens toggle button
-                            Button {
-                                triggerLensToggle.toggle()  // just flip the bool
-                                isUltraWide.toggle()        // update UI label
-                            } label: {
-                                Text(isUltraWide ? "1x" : ".5x")
-                                    .font(.system(size: 15, weight: .semibold))
-                                    .foregroundStyle(.white)
-                                    .frame(width: 44, height: 44)
-                                    .background(.ultraThinMaterial)
-                                    .clipShape(Circle())
-                                    .shadow(color: .black.opacity(0.4), radius: 4)
-                            }
-                            .padding(.trailing, 20)
-                            .padding(.top, 20)
-                        }
+                    Button { dismiss() } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 28))
+                            .foregroundStyle(.white)
+                            .shadow(color: .black.opacity(0.5), radius: 4)
                     }
+                    .padding(.leading, 20)
+                    .padding(.top, 20)
+
+                    Spacer()
+                }
 
                 Spacer()
 
@@ -118,33 +106,92 @@ struct CameraView: View {
                         ConfidenceBar(confidence: confidence).transition(.opacity)
                     }
 
-                    Button { isCapturing = true } label: {
-                        ZStack {
-                            Circle().fill(.white).frame(width: 72, height: 72)
-                            Circle()
-                                .stroke(
-                                    detectionState == .detected || detectionState == .confirming
-                                        ? Color.green : Color.white.opacity(0.5),
-                                    lineWidth: 4
-                                )
-                                .frame(width: 84, height: 84)
+                    ZStack {
+                        Button { isCapturing = true } label: {
+                            ZStack {
+                                Circle().fill(.white).frame(width: 72, height: 72)
+                                Circle()
+                                    .stroke(
+                                        detectionState == .detected || detectionState == .confirming
+                                            ? Color.green : Color.white.opacity(0.5),
+                                        lineWidth: 4
+                                    )
+                                    .frame(width: 84, height: 84)
+                            }
                         }
+                        .disabled(isCapturing || showRetry)
+                        .shadow(color: .black.opacity(0.3), radius: 6)
+
+                        HStack {
+                            // Home button (bottom-left)
+                            Button { dismiss() } label: {
+                                Image(systemName: "house.fill")
+                                    .font(.system(size: 18, weight: .semibold))
+                                    .foregroundStyle(.white)
+                                    .frame(width: 44, height: 44)
+                                    .liquidGlass(in: Circle(), interactive: true)
+                                    .shadow(color: .black.opacity(0.4), radius: 4)
+                            }
+
+                            Spacer()
+
+                            // Lens toggle (bottom-right)
+                            if AVCaptureDevice.default(.builtInUltraWideCamera, for: .video, position: .back) != nil {
+                                Button {
+                                    triggerLensToggle.toggle()
+                                    isUltraWide.toggle()
+                                } label: {
+                                    Text(isUltraWide ? "1x" : ".5x")
+                                        .font(.system(size: 15, weight: .semibold))
+                                        .foregroundStyle(.white)
+                                        .frame(width: 44, height: 44)
+                                        .liquidGlass(in: Circle(), interactive: true)
+                                        .shadow(color: .black.opacity(0.4), radius: 4)
+                                }
+                            }
+                        }
+                        .padding(.horizontal, 40)
                     }
-                    .disabled(isCapturing || showRetry)
-                    .shadow(color: .black.opacity(0.3), radius: 6)
                 }
                 .padding(.bottom, 40)
             }
-            .opacity(showRetry ? 0.3 : 1)
+            .opacity(showRetry || showLowConfidence ? 0.3 : 1)
 
             if showRetry {
+                Color.black.opacity(0.001)
+                    .ignoresSafeArea()
+                    .contentShape(Rectangle())
+                    .onTapGesture { retryCamera() }
+
                 retryOverlay
+                    .onTapGesture { /* swallow taps so backdrop doesn't dismiss */ }
+                    .transition(.scale(scale: 0.85).combined(with: .opacity))
+            }
+
+            if showLowConfidence, let album = lowConfidenceAlbum {
+                Color.black.opacity(0.001)
+                    .ignoresSafeArea()
+                    .contentShape(Rectangle())
+                    .onTapGesture { dismissLowConfidence() }
+
+                lowConfidenceOverlay(for: album)
+                    .onTapGesture { /* swallow taps so backdrop doesn't dismiss */ }
                     .transition(.scale(scale: 0.85).combined(with: .opacity))
             }
         }
         .statusBar(hidden: true)
         .animation(.easeInOut(duration: 0.3), value: detectionState)
         .animation(.spring(response: 0.35, dampingFraction: 0.75), value: showRetry)
+        .animation(.spring(response: 0.35, dampingFraction: 0.75), value: showLowConfidence)
+        .onChange(of: appState.currentAlbum) { _, newAlbum in
+            // When an album gets set externally — e.g. user picked one from the
+            // search sheet inside a retry / low-confidence overlay — dismiss the
+            // camera so ContentView can surface AlbumDetailView.
+            if newAlbum != nil {
+                appState.isScanning = false
+                dismiss()
+            }
+        }
     }
 
     private var retryOverlay: some View {
@@ -185,17 +232,100 @@ struct CameraView: View {
                 .environment(appState)
         }
         .padding(32)
-        .background(
-            RoundedRectangle(cornerRadius: 28)
-                .fill(.ultraThickMaterial)
-                .shadow(color: .black.opacity(0.25), radius: 30, x: 0, y: 10)
-        )
+        .liquidGlass(in: RoundedRectangle(cornerRadius: 28))
+        .shadow(color: .black.opacity(0.25), radius: 30, x: 0, y: 10)
         .padding(.horizontal, 24)
     }
 
     private func retryCamera() {
         showRetry = false
         retryMessage = ""
+        isCapturing = false
+        detectionState = .searching
+        confidence = 0
+        detectedRect = .zero
+        cameraKey = UUID()
+    }
+
+    private func lowConfidenceOverlay(for album: Album) -> some View {
+        VStack(spacing: 24) {
+            Image(systemName: "questionmark.circle")
+                .font(.system(size: 52))
+                .foregroundStyle(.yellow)
+
+            VStack(spacing: 8) {
+                Text("Is this the right album?")
+                    .font(.title2).fontWeight(.bold)
+                Text("We're not totally sure about this match. If it looks wrong, try the Search tab.")
+                    .font(.subheadline).foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 20)
+            }
+
+            HStack(spacing: 12) {
+                AsyncImage(url: URL(string: album.imageURL)) { img in
+                    img.resizable().aspectRatio(contentMode: .fill)
+                } placeholder: {
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(.quaternary)
+                        .overlay(Image(systemName: "opticaldisc").foregroundStyle(.secondary))
+                }
+                .frame(width: 56, height: 56)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(album.name)
+                        .font(.subheadline).fontWeight(.semibold)
+                        .lineLimit(1)
+                    Text(album.artist)
+                        .font(.caption).foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Spacer()
+            }
+            .padding(12)
+            .liquidGlass(in: RoundedRectangle(cornerRadius: 12))
+
+            VStack(spacing: 12) {
+                Button { acceptLowConfidenceMatch() } label: {
+                    Label("Looks Right", systemImage: "checkmark.circle.fill")
+                        .font(.subheadline).fontWeight(.semibold)
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .background(LinearGradient(colors: [.purple, .pink],
+                            startPoint: .topLeading, endPoint: .bottomTrailing))
+                        .clipShape(Capsule())
+                }
+
+                AlbumSearchButton(
+                    prefill: "\(album.artist) \(album.name)",
+                    style: .prominent,
+                    suggestions: lowConfidenceOCRLines
+                )
+                .environment(appState)
+            }
+        }
+        .padding(32)
+        .liquidGlass(in: RoundedRectangle(cornerRadius: 28))
+        .shadow(color: .black.opacity(0.25), radius: 30, x: 0, y: 10)
+        .padding(.horizontal, 24)
+    }
+
+    private func acceptLowConfidenceMatch() {
+        guard let album = lowConfidenceAlbum else { return }
+        appState.currentAlbum = album
+        appState.addToHistory(album)
+        appState.isScanning = false
+        showLowConfidence = false
+        lowConfidenceAlbum = nil
+        dismiss()
+    }
+
+    private func dismissLowConfidence() {
+        showLowConfidence = false
+        lowConfidenceAlbum = nil
+        lowConfidenceOCRLines = []
         isCapturing = false
         detectionState = .searching
         confidence = 0
@@ -210,22 +340,22 @@ struct CameraView: View {
             Label("Searching for album...", systemImage: "viewfinder")
                 .font(.subheadline).foregroundStyle(.white)
                 .padding(.horizontal, 20).padding(.vertical, 10)
-                .background(.ultraThinMaterial).cornerRadius(20)
+                .liquidGlass(in: Capsule())
         case .detected:
             Label("Album detected! Hold steady...", systemImage: "checkmark.circle")
                 .font(.subheadline).foregroundStyle(.green)
                 .padding(.horizontal, 20).padding(.vertical, 10)
-                .background(.ultraThinMaterial).cornerRadius(20)
+                .liquidGlass(in: Capsule())
         case .confirming:
             Label("Locking in...", systemImage: "lock.circle")
                 .font(.subheadline).foregroundStyle(.green)
                 .padding(.horizontal, 20).padding(.vertical, 10)
-                .background(.ultraThinMaterial).cornerRadius(20)
+                .liquidGlass(in: Capsule())
         case .capturing:
             Label("Identifying album...", systemImage: "sparkles")
                 .font(.subheadline).foregroundStyle(.white)
                 .padding(.horizontal, 20).padding(.vertical, 10)
-                .background(.ultraThinMaterial).cornerRadius(20)
+                .liquidGlass(in: Capsule())
         }
     }
 
@@ -236,14 +366,22 @@ struct CameraView: View {
             appState.errorMessage = nil
         }
         do {
-            let album = try await AlbumRecognitionService.shared.recognizeAlbum(from: image)
+            let result = try await AlbumRecognitionService.shared.recognizeAlbum(from: image)
             await MainActor.run {
-                appState.currentAlbum = album
-                appState.addToHistory(album)
                 appState.isLoadingAlbum = false
-                appState.isScanning = false
+
+                if result.confidence < lowConfidenceThreshold {
+                    // Surface the match but ask the user to confirm or search manually
+                    lowConfidenceAlbum = result.album
+                    lowConfidenceOCRLines = result.ocrLines
+                    showLowConfidence = true
+                } else {
+                    appState.currentAlbum = result.album
+                    appState.addToHistory(result.album)
+                    appState.isScanning = false
+                    dismiss()
+                }
             }
-            await MainActor.run { dismiss() }
         } catch {
             await MainActor.run {
                 appState.isLoadingAlbum = false

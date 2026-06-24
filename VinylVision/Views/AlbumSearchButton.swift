@@ -16,6 +16,9 @@ struct AlbumSearchButton: View {
     /// Visual style
     var style: SearchButtonStyle = .capsule
 
+    /// Optional quick-fill suggestions shown as chips below the search bar.
+    var suggestions: [String] = []
+
     @State private var showSearch = false
 
     enum SearchButtonStyle {
@@ -43,8 +46,7 @@ struct AlbumSearchButton: View {
                     .font(.subheadline).fontWeight(.semibold)
                     .foregroundStyle(.white)
                     .padding(.horizontal, 24).padding(.vertical, 14)
-                    .background(.ultraThinMaterial)
-                    .clipShape(Capsule())
+                    .liquidGlass(in: Capsule(), interactive: true)
 
             case .plain:
                 Label("Manually search for an album", systemImage: "magnifyingglass")
@@ -53,7 +55,7 @@ struct AlbumSearchButton: View {
             }
         }
         .sheet(isPresented: $showSearch) {
-            AlbumSearchView(initialQuery: resolvedPrefill)
+            AlbumSearchView(initialQuery: resolvedPrefill, suggestions: suggestions)
                 .environment(appState)
         }
     }
@@ -62,5 +64,19 @@ struct AlbumSearchButton: View {
         if let prefill { return prefill }
         guard let album = appState.currentAlbum else { return "" }
         return "\(album.artist) \(album.name)"
+    }
+}
+
+// MARK: - Liquid Glass helper
+
+extension View {
+    /// Applies the Liquid Glass material in the given shape.
+    @ViewBuilder
+    func liquidGlass<S: Shape>(in shape: S, interactive: Bool = false) -> some View {
+        if interactive {
+            glassEffect(.regular.interactive(), in: shape)
+        } else {
+            glassEffect(in: shape)
+        }
     }
 }

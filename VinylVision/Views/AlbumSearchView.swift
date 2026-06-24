@@ -10,6 +10,7 @@ struct AlbumSearchView: View {
     @Environment(\.dismiss) private var dismiss
 
     var initialQuery: String = ""
+    var suggestions: [String] = []
 
     @State private var searchText = ""
     @State private var results: [AlbumSearchResult] = []
@@ -43,11 +44,34 @@ struct AlbumSearchView: View {
                     }
                 }
                 .padding(12)
-                .background(.ultraThinMaterial)
-                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .liquidGlass(in: RoundedRectangle(cornerRadius: 12))
                 .padding(.horizontal, 16)
                 .padding(.top, 12)
                 .padding(.bottom, 8)
+
+                if !suggestions.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(Array(suggestions.prefix(10)), id: \.self) { suggestion in
+                                Button {
+                                    searchText = suggestion
+                                    performSearch()
+                                } label: {
+                                    Text(suggestion)
+                                        .font(.caption)
+                                        .foregroundStyle(.primary)
+                                        .lineLimit(1)
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 6)
+                                        .liquidGlass(in: Capsule(), interactive: true)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        .padding(.horizontal, 16)
+                    }
+                    .padding(.bottom, 8)
+                }
 
                 Divider()
 

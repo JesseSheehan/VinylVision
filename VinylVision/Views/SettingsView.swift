@@ -9,6 +9,7 @@ struct SettingsView: View {
     @Environment(AppState.self) private var appState
     @AppStorage("autoPlay") private var autoPlay = true
     @AppStorage("playMostPopular") private var playMostPopular = false
+    @AppStorage("preferredStreamingService") private var preferredServiceRaw = StreamingService.appleMusic.rawValue
     
     var body: some View {
         Form {
@@ -32,13 +33,17 @@ struct SettingsView: View {
             }
             
             Section {
-                HStack {
-                    Text("Music Service")
-                    Spacer()
-                    Text("Spotify (Free Previews)")
-                        .foregroundStyle(.secondary)
+                Picker("Streaming Service", selection: $preferredServiceRaw) {
+                    ForEach(StreamingService.allCases) { service in
+                        Text(service.displayName).tag(service.rawValue)
+                    }
                 }
-                
+                .onChange(of: preferredServiceRaw) { _, newValue in
+                    if let service = StreamingService(rawValue: newValue) {
+                        appState.preferredStreamingService = service
+                    }
+                }
+
                 HStack {
                     Text("Preview Length")
                     Spacer()
@@ -48,7 +53,7 @@ struct SettingsView: View {
             } header: {
                 Text("Audio")
             } footer: {
-                Text("Free 30-second previews provided by Spotify. For full playback, connect your Spotify or Apple Music account.")
+                Text("Choose where the album page opens for full playback. 30-second previews are powered by Deezer.")
             }
             
             Section {
@@ -76,6 +81,9 @@ struct SettingsView: View {
         .onAppear {
             appState.autoPlay = autoPlay
             appState.playMostPopular = playMostPopular
+            if let service = StreamingService(rawValue: preferredServiceRaw) {
+                appState.preferredStreamingService = service
+            }
         }
     }
 }

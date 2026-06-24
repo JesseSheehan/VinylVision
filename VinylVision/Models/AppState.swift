@@ -18,6 +18,7 @@ class AppState {
     var playbackProgress: Double = 0.0
     var autoPlay: Bool = true
     var playMostPopular: Bool = false
+    var preferredStreamingService: StreamingService = .appleMusic
     var recentAlbums: [Album] = []
 
     init() { loadHistory() }
@@ -65,6 +66,57 @@ struct Album: Identifiable, Codable, Hashable {
         let query = "\(artist) \(name) album"
             .addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
         return URL(string: "https://en.wikipedia.org/wiki/Special:Search?search=\(query)")
+    }
+
+    /// URL to open this album in the user's preferred streaming service.
+    /// Uses the direct URL when we have one, otherwise falls back to a search query
+    /// that universal-links into the service's app (or web).
+    func streamingURL(for service: StreamingService) -> URL? {
+        let encodedQuery = "\(artist) \(name)"
+            .addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+        switch service {
+        case .appleMusic:
+            if let appleMusicURL, let url = URL(string: appleMusicURL) { return url }
+            return URL(string: "https://music.apple.com/search?term=\(encodedQuery)")
+        case .spotify:
+            if let spotifyURL, let url = URL(string: spotifyURL) { return url }
+            return URL(string: "https://open.spotify.com/search/\(encodedQuery)")
+        case .deezer:
+            if let deezerURL, let url = URL(string: deezerURL) { return url }
+            return URL(string: "https://www.deezer.com/search/\(encodedQuery)")
+        }
+    }
+}
+
+enum StreamingService: String, CaseIterable, Identifiable, Codable {
+    case appleMusic
+    case spotify
+    case deezer
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .appleMusic: "Apple Music"
+        case .spotify:    "Spotify"
+        case .deezer:     "Deezer"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .appleMusic: "music.note"
+        case .spotify:    "music.note.list"
+        case .deezer:     "headphones"
+        }
+    }
+
+    var tintColor: Color {
+        switch self {
+        case .appleMusic: .pink
+        case .spotify:    .green
+        case .deezer:     .orange
+        }
     }
 }
 

@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		2F01CA852FD9FA730082261B /* .gitignore in Resources */ = {isa = PBXBuildFile; fileRef = 2F01CA662FD9FA730082261B /* .gitignore */; };
+		2F27E27F2FE9A35800462DE7 /* VinylVisionTestImage-iOS-Default-1024x1024@1x.png in Resources */ = {isa = PBXBuildFile; fileRef = 2F27E27E2FE9A35800462DE7 /* VinylVisionTestImage-iOS-Default-1024x1024@1x.png */; };
 		2FF391D72FB972140044DE65 /* RealityKitContent in Frameworks */ = {isa = PBXBuildFile; productRef = 2FF391D62FB972140044DE65 /* RealityKitContent */; };
 		2FF392002FB978FD0044DE65 /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2FF391FF2FB978FD0044DE65 /* SwiftUI.framework */; };
 		2FF392022FB979120044DE65 /* ARKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2FF392012FB979120044DE65 /* ARKit.framework */; };
@@ -16,6 +18,8 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		2F01CA662FD9FA730082261B /* .gitignore */ = {isa = PBXFileReference; lastKnownFileType = text; path = .gitignore; sourceTree = "<group>"; };
+		2F27E27E2FE9A35800462DE7 /* VinylVisionTestImage-iOS-Default-1024x1024@1x.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "VinylVisionTestImage-iOS-Default-1024x1024@1x.png"; sourceTree = "<group>"; };
 		2FF391D12FB972140044DE65 /* VinylVision.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = VinylVision.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		2FF391D52FB972140044DE65 /* RealityKitContent */ = {isa = PBXFileReference; lastKnownFileType = wrapper; path = RealityKitContent; sourceTree = "<group>"; };
 		2FF391FF2FB978FD0044DE65 /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.5.sdk/System/Library/Frameworks/SwiftUI.framework; sourceTree = DEVELOPER_DIR; };
@@ -70,6 +74,8 @@
 				2FF391D42FB972140044DE65 /* Packages */,
 				2FF391FE2FB978FD0044DE65 /* Frameworks */,
 				2FF391D22FB972140044DE65 /* Products */,
+				2F01CA662FD9FA730082261B /* .gitignore */,
+				2F27E27E2FE9A35800462DE7 /* VinylVisionTestImage-iOS-Default-1024x1024@1x.png */,
 			);
 			sourceTree = "<group>";
 		};
@@ -166,6 +172,8 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				2F01CA852FD9FA730082261B /* .gitignore in Resources */,
+				2F27E27F2FE9A35800462DE7 /* VinylVisionTestImage-iOS-Default-1024x1024@1x.png in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -189,18 +197,22 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = X3MYNPLVQY;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "$(TARGET_NAME)/Info.plist";
-				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.music";
+				INFOPLIST_KEY_NSCameraUsageDescription = "VinylVision needs camera access to identify album covers";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 0.8;
 				PRODUCT_BUNDLE_IDENTIFIER = me.jesse.sheehan.VinylVision;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -211,7 +223,7 @@
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = "1,2,7";
+				TARGETED_DEVICE_FAMILY = "1,7";
 				XROS_DEPLOYMENT_TARGET = 26.0;
 				YOUR_GOOGLE_CLOUD_API_KEY = "";
 			};
@@ -224,18 +236,22 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = X3MYNPLVQY;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "$(TARGET_NAME)/Info.plist";
-				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.music";
+				INFOPLIST_KEY_NSCameraUsageDescription = "VinylVision needs camera access to identify album covers";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 0.8;
 				PRODUCT_BUNDLE_IDENTIFIER = me.jesse.sheehan.VinylVision;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -246,7 +262,7 @@
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = "1,2,7";
+				TARGETED_DEVICE_FAMILY = "1,7";
 				XROS_DEPLOYMENT_TARGET = 26.0;
 				YOUR_GOOGLE_CLOUD_API_KEY = "";
 			};

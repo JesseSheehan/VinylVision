@@ -20,7 +20,7 @@ class AlbumRecognitionService {
 
     // MARK: - Main Entry Point
 
-    func recognizeAlbum(from image: UIImage?) async throws -> Album {
+    func recognizeAlbum(from image: UIImage?) async throws -> RecognitionResult {
         guard let image = image else { throw RecognitionError.invalidImage }
 
         let result = try await callVisionAPI(image: image)
@@ -42,6 +42,13 @@ class AlbumRecognitionService {
             queriesToTry.append(contentsOf: buildOCRQueries(from: ocrLines))
         }
 
+        // Cleaned, de-duplicated OCR lines — useful as manual-search suggestions
+        // when confidence is low.
+        var seenOCR = Set<String>()
+        let cleanedOCRLines = ocrLines
+            .compactMap { cleanOCRLine($0) }
+            .filter { seenOCR.insert($0.lowercased()).inserted }
+
         if let webQuery = extractWebQuery(from: result) {
             queriesToTry.append(webQuery)
             let simple = simplifyQuery(webQuery)
@@ -58,7 +65,7 @@ class AlbumRecognitionService {
             print("💿 Trying Discogs: \(query)")
             if let album = try await searchViaDiscogs(query: query) {
                 print("✅ Discogs hit: \(album.name) by \(album.artist)")
-                return album
+                return RecognitionResult(album: album, confidence: musicScore, ocrLines: cleanedOCRLines)
             }
         }
 
@@ -69,7 +76,7 @@ class AlbumRecognitionService {
             print("🎵 Trying Deezer: \(query)")
             if let album = try await searchDeezerAlbum(query: query) {
                 print("✅ Deezer hit: \(album.name) by \(album.artist)")
-                return album
+                return RecognitionResult(album: album, confidence: musicScore, ocrLines: cleanedOCRLines)
             }
         }
 
@@ -612,6 +619,19 @@ class AlbumRecognitionService {
         UIGraphicsEndImageContext()
         return resized ?? image
     }
+}
+
+// MARK: - Recognition Result
+
+struct RecognitionResult {
+    let album: Album
+    /// Music confidence score from Vision API analysis (0.0 – ~1.0).
+    /// Below ~0.5 means we matched something but aren't confident the source image
+    /// was clearly an album cover — UI should suggest manual search.
+    let confidence: Double
+    /// Cleaned OCR lines extracted from the scanned image, surfaced as
+    /// quick-fill chips on the manual search page for low-confidence matches.
+    let ocrLines: [String]
 }
 
 // MARK: - Errors
