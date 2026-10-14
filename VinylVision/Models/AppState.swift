@@ -19,9 +19,32 @@ class AppState {
     var autoPlay: Bool = true
     var playMostPopular: Bool = false
     var preferredStreamingService: StreamingService = .appleMusic
+    var useGeminiRecognition: Bool = false
+    var autoPhotoEnabled: Bool = true
+    var showAutoPhotoToggle: Bool = true
     var recentAlbums: [Album] = []
 
-    init() { loadHistory() }
+    init() {
+        loadHistory()
+        // Hydrate user prefs from UserDefaults so they're correct at launch,
+        // before SettingsView (which mirrors @AppStorage → AppState) is opened.
+        let defaults = UserDefaults.standard
+        if defaults.object(forKey: "autoPlay") != nil {
+            autoPlay = defaults.bool(forKey: "autoPlay")
+        }
+        playMostPopular = defaults.bool(forKey: "playMostPopular")
+        useGeminiRecognition = defaults.bool(forKey: "useGeminiRecognition")
+        if defaults.object(forKey: "autoPhotoEnabled") != nil {
+            autoPhotoEnabled = defaults.bool(forKey: "autoPhotoEnabled")
+        }
+        if defaults.object(forKey: "showAutoPhotoToggle") != nil {
+            showAutoPhotoToggle = defaults.bool(forKey: "showAutoPhotoToggle")
+        }
+        if let raw = defaults.string(forKey: "preferredStreamingService"),
+           let service = StreamingService(rawValue: raw) {
+            preferredStreamingService = service
+        }
+    }
 
     func reset() {
         currentAlbum = nil; currentTrack = nil

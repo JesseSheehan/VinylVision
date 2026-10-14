@@ -10,6 +10,9 @@ struct SettingsView: View {
     @AppStorage("autoPlay") private var autoPlay = true
     @AppStorage("playMostPopular") private var playMostPopular = false
     @AppStorage("preferredStreamingService") private var preferredServiceRaw = StreamingService.appleMusic.rawValue
+    @AppStorage("useGeminiRecognition") private var useGeminiRecognition = false
+    @AppStorage("autoPhotoEnabled") private var autoPhotoEnabled = true
+    @AppStorage("showAutoPhotoToggle") private var showAutoPhotoToggle = true
     
     var body: some View {
         Form {
@@ -32,6 +35,32 @@ struct SettingsView: View {
                 Text("Choose which track plays automatically when an album is recognized.")
             }
             
+            Section {
+                Toggle("Use Gemini AI", isOn: $useGeminiRecognition)
+                    .onChange(of: useGeminiRecognition) { _, newValue in
+                        appState.useGeminiRecognition = newValue
+                    }
+            } header: {
+                Text("Recognition")
+            } footer: {
+                Text("When on, identify scanned albums with Gemini 2.5 Flash instead of OCR. Token usage is printed to the Xcode console.")
+            }
+
+            Section {
+                Toggle("Auto-photograph", isOn: $autoPhotoEnabled)
+                    .onChange(of: autoPhotoEnabled) { _, newValue in
+                        appState.autoPhotoEnabled = newValue
+                    }
+                Toggle("Show on-camera toggle", isOn: $showAutoPhotoToggle)
+                    .onChange(of: showAutoPhotoToggle) { _, newValue in
+                        appState.showAutoPhotoToggle = newValue
+                    }
+            } header: {
+                Text("Capture")
+            } footer: {
+                Text("When auto-photograph is on, the camera shutter fires automatically once an album is held steady. Turn off to capture manually with the shutter button.")
+            }
+
             Section {
                 Picker("Streaming Service", selection: $preferredServiceRaw) {
                     ForEach(StreamingService.allCases) { service in
@@ -81,6 +110,9 @@ struct SettingsView: View {
         .onAppear {
             appState.autoPlay = autoPlay
             appState.playMostPopular = playMostPopular
+            appState.useGeminiRecognition = useGeminiRecognition
+            appState.autoPhotoEnabled = autoPhotoEnabled
+            appState.showAutoPhotoToggle = showAutoPhotoToggle
             if let service = StreamingService(rawValue: preferredServiceRaw) {
                 appState.preferredStreamingService = service
             }

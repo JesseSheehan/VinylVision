@@ -23,11 +23,14 @@ class AudioPlayerManager: NSObject, ObservableObject {
     }
     
     private func setupAudioSession() {
-        do {
-            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
-            try AVAudioSession.sharedInstance().setActive(true)
-        } catch {
-            print("Failed to setup audio session: \(error)")
+        // setActive(true) blocks on the main thread; hop off it.
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
+                try AVAudioSession.sharedInstance().setActive(true)
+            } catch {
+                print("Failed to setup audio session: \(error)")
+            }
         }
     }
     

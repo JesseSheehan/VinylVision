@@ -15,13 +15,18 @@ class AlbumRecognitionService {
 
     private let googleCloudAPIKey = Bundle.main.object(forInfoDictionaryKey: "GOOGLE_CLOUD_API_KEY") as? String ?? ""
     private let discogsToken = Bundle.main.object(forInfoDictionaryKey: "DISCOGS_TOKEN") as? String ?? ""
+    private let geminiAPIKey = Bundle.main.object(forInfoDictionaryKey: "GEMINI_API_KEY") as? String ?? ""
 
     private init() {}
 
     // MARK: - Main Entry Point
 
-    func recognizeAlbum(from image: UIImage?) async throws -> RecognitionResult {
+    func recognizeAlbum(from image: UIImage?, useGemini: Bool = false) async throws -> RecognitionResult {
         guard let image = image else { throw RecognitionError.invalidImage }
+
+        if useGemini {
+            return try await recognizeWithGemini(image: image)
+        }
 
         let result = try await callVisionAPI(image: image)
 
@@ -83,6 +88,221 @@ class AlbumRecognitionService {
         throw RecognitionError.albumNotFound
     }
 
+    // MARK: - Gemini Recognition
+
+    private func recognizeWithGemini(image: UIImage) async throws -> RecognitionResult {
+        let (identification, usage) = try await callGeminiAPI(image: image)
+        let tokenSummary = usage?.summary ?? "unreported"
+
+        guard identification.isAlbumPackaging else {
+            print("🚫 Gemini says this isn't album packaging - bailing")
+            throw RecognitionError.notAnAlbum
+        }
+
+        let candidates = identification.rankedCandidates
+        guard !candidates.isEmpty else { throw RecognitionError.albumNotFound }
+
+        // Suggestion chips for the manual-search sheet: every candidate Gemini
+        // proposed, plus any text it actually read off the sleeve.
+        var seenSuggestion = Set<String>()
+        let suggestions = (candidates.map { $0.searchQuery } + identification.visibleText)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty && seenSuggestion.insert($0.lowercased()).inserted }
+
+        // ── Stage 1: Discogs for each candidate, most likely first ────
+        for candidate in candidates {
+            print("💿 Trying Discogs with Gemini candidate: \(candidate.searchQuery) (\(String(format: "%.2f", candidate.confidence)))")
+            if let album = try await searchViaDiscogs(query: candidate.searchQuery) {
+                print("✅ Discogs hit: \(album.name) by \(album.artist)")
+                print("🤖 Gemini tokens for this result — \(tokenSummary)")
+                return RecognitionResult(album: album,
+                                         confidence: candidate.confidence,
+                                         ocrLines: suggestions)
+            }
+        }
+
+        print("⚠️ Discogs exhausted, falling back to Deezer")
+
+        // ── Stage 2: Deezer directly ──────────────────────────────────
+        for candidate in candidates {
+            print("🎵 Trying Deezer with Gemini candidate: \(candidate.searchQuery)")
+            if let album = try await searchDeezerAlbum(query: candidate.searchQuery) {
+                print("✅ Deezer hit: \(album.name) by \(album.artist)")
+                print("🤖 Gemini tokens for this result — \(tokenSummary)")
+                return RecognitionResult(album: album,
+                                         confidence: candidate.confidence,
+                                         ocrLines: suggestions)
+            }
+        }
+
+        throw RecognitionError.albumNotFound
+    }
+
+    private func callGeminiAPI(image: UIImage) async throws -> (identification: GeminiIdentification, usage: GeminiTokenUsage?) {
+        guard !geminiAPIKey.isEmpty else {
+            print("⚠️ No Gemini API key configured")
+            throw RecognitionError.visionAPIFailed
+        }
+
+        // Textless covers are identified from fine artwork detail — grain, label
+        // logos, spine print — so this path uses a larger, less-compressed image
+        // than the Vision path.
+        let resized = resizeImage(image, maxDimension: 1536)
+        guard let imageData = resized.jpegData(compressionQuality: 0.9) else {
+            throw RecognitionError.invalidImage
+        }
+
+        let prompt = """
+        You are a record-store clerk with encyclopedic knowledge of album artwork. \
+        The photo shows physical music packaging — a vinyl LP sleeve, a CD jewel case or digipak, \
+        or a cassette J-card — usually held up in a room, at an angle, under imperfect light.
+
+        Work through it in this order:
+
+        1. Read every piece of text: artist, title, spine, catalogue number, record label, \
+        hype sticker, small print. Text is the strongest signal when it exists.
+
+        2. MANY GREAT COVERS HAVE NO TITLE OR ARTIST ON THEM AT ALL. If text is absent, \
+        obscured, or in a script you can't read, identify the release from the artwork alone. Use:
+           - the exact photograph, painting or illustration, and how it is cropped
+           - faces of recognizable musicians
+           - emblems, sigils and symbols (a prism, four runes, a banana, a zipper, a burning man)
+           - typeface, colour palette, borders, and era-specific design language
+           - a label's house style (Blue Note, ECM, 4AD, Factory, Sub Pop, Impulse!)
+           - format and pressing cues: gatefold, obi strip, "STEREO"/"MONO" banner, matrix text
+        Reason about which specific release the art belongs to before answering.
+
+        3. If you recognize the artist but not the release, choose the release whose known cover \
+        art actually matches what you see. Do NOT fall back on that artist's most famous album \
+        unless the artwork matches it.
+
+        4. Give the title as it is catalogued (Discogs / MusicBrainz style), preferring the \
+        original release over reissues and compilations. For an untitled or self-titled release, \
+        make the catalogued form your first candidate and the colloquial name a second candidate \
+        (e.g. "Led Zeppelin - Untitled" then "Led Zeppelin - Led Zeppelin IV"; \
+        "The Beatles - The Beatles" then "The Beatles - White Album").
+
+        Return 1-3 candidates, most likely first. When unsure between plausible releases, \
+        return them all rather than guessing one — a later database lookup will settle it. \
+        Set confidence honestly: 0.9+ only when you are certain of both artist and release, \
+        0.5-0.8 when the artist is certain but the release is inferred, below 0.4 for a guess. \
+        Return an empty candidate list rather than inventing a release you don't recognize.
+        """
+
+        // Structured output: the shape is enforced by the API, so there's no
+        // free-text format to parse (or for the model to editorialize around).
+        let responseSchema: [String: Any] = [
+            "type": "object",
+            "properties": [
+                "isAlbumPackaging": [
+                    "type": "boolean",
+                    "description": "True only if the photo shows a vinyl sleeve, CD case, or cassette."
+                ],
+                "hasReadableText": [
+                    "type": "boolean",
+                    "description": "True if artist or title text is legible on the packaging."
+                ],
+                "visibleText": [
+                    "type": "array",
+                    "description": "Text lines actually read off the packaging, most prominent first. Empty for a textless cover.",
+                    "items": ["type": "string"]
+                ],
+                "candidates": [
+                    "type": "array",
+                    "description": "Up to 3 releases, most likely first. Empty if unrecognized.",
+                    "items": [
+                        "type": "object",
+                        "properties": [
+                            "artist": ["type": "string"],
+                            "album": ["type": "string"],
+                            "confidence": [
+                                "type": "number",
+                                "description": "0.0 to 1.0."
+                            ],
+                            "identifiedFrom": [
+                                "type": "string",
+                                "description": "Which cue settled it.",
+                                "enum": ["text", "artwork", "both"]
+                            ]
+                        ],
+                        "required": ["artist", "album", "confidence", "identifiedFrom"],
+                        "propertyOrdering": ["artist", "album", "confidence", "identifiedFrom"]
+                    ]
+                ]
+            ],
+            "required": ["isAlbumPackaging", "hasReadableText", "visibleText", "candidates"],
+            "propertyOrdering": ["isAlbumPackaging", "hasReadableText", "visibleText", "candidates"]
+        ]
+
+        let body: [String: Any] = [
+            "contents": [[
+                "parts": [
+                    ["inline_data": [
+                        "mime_type": "image/jpeg",
+                        "data": imageData.base64EncodedString()
+                    ]],
+                    ["text": prompt]
+                ]
+            ]],
+            "generationConfig": [
+                // Slightly above zero so the candidate list isn't three
+                // near-identical restatements of the same guess.
+                "temperature": 0.2,
+                "responseMimeType": "application/json",
+                "responseSchema": responseSchema,
+                // Thinking tokens are billed against maxOutputTokens on Gemini 2.5,
+                // so this budget covers reasoning *and* the JSON payload. Recalling
+                // a textless cover genuinely benefits from a few hundred tokens of
+                // deliberation, so unlike the old prompt we fund it — but cap it so
+                // a stubborn image can't run away with the request.
+                "thinkingConfig": ["thinkingBudget": 1024],
+                "maxOutputTokens": 2048
+            ]
+        ]
+
+        guard let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=\(geminiAPIKey)") else {
+            throw RecognitionError.visionAPIFailed
+        }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONSerialization.data(withJSONObject: body)
+        req.timeoutInterval = 30
+
+        let (data, response) = try await URLSession.shared.data(for: req)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+            print("❌ Gemini status: \(code)")
+            if let body = String(data: data, encoding: .utf8) { print("   body: \(body.prefix(500))") }
+            throw RecognitionError.visionAPIFailed
+        }
+
+        let decoded = try JSONDecoder().decode(GeminiResponse.self, from: data)
+
+        let usage = decoded.usageMetadata.map(GeminiTokenUsage.init)
+        if let usage {
+            print("🤖 Gemini tokens — \(usage.summary)")
+        }
+
+        let candidate = decoded.candidates.first
+
+        // If thinking consumed the whole budget the JSON arrives truncated —
+        // worth naming explicitly, since it looks like a decode failure otherwise.
+        if candidate?.finishReason == "MAX_TOKENS" {
+            print("⚠️ Gemini hit maxOutputTokens before finishing its answer")
+        }
+
+        guard let text = candidate?.content?.parts?.first?.text,
+              let payload = text.data(using: .utf8) else {
+            print("❌ Gemini returned no text (finishReason: \(candidate?.finishReason ?? "none"))")
+            throw RecognitionError.albumNotFound
+        }
+
+        let identification = try JSONDecoder().decode(GeminiIdentification.self, from: payload)
+        print("🤖 Gemini: album=\(identification.isAlbumPackaging), text=\(identification.hasReadableText), candidates=\(identification.rankedCandidates.map { "\($0.searchQuery) [\($0.identifiedFrom ?? "?")]" })")
+        return (identification, usage)
+    }
+
     // MARK: - Discogs Search → then Deezer for audio
 
     /// Searches Discogs for the best physical media match,
@@ -130,35 +350,88 @@ class AlbumRecognitionService {
         let deezerQuery = artist.isEmpty ? albumTitle : "\(artist) \(albumTitle)"
         print("🎵 Searching Deezer with Discogs result: \(deezerQuery)")
 
-        if let album = try await searchDeezerAlbum(query: deezerQuery) {
-            return album
+        if let candidate = try await searchDeezerAlbum(query: deezerQuery) {
+            if deezerResultMatches(album: candidate, expectedTitle: albumTitle, expectedArtist: artist) {
+                return candidate
+            }
+            print("⚠️ Deezer top result didn't match expected — got '\(candidate.name)' by \(candidate.artist) for '\(deezerQuery)'")
         }
 
         // If Deezer can't find it by artist+title, try title alone
         if !albumTitle.isEmpty, albumTitle != deezerQuery {
-            if let album = try await searchDeezerAlbum(query: albumTitle) {
-                return album
+            if let candidate = try await searchDeezerAlbum(query: albumTitle) {
+                if deezerResultMatches(album: candidate, expectedTitle: albumTitle, expectedArtist: artist) {
+                    return candidate
+                }
+                print("⚠️ Deezer title-only fallback didn't match either — got '\(candidate.name)'")
             }
         }
 
-        // Discogs found it but Deezer has no audio -
-        // Build a minimal Album from Discogs data so user at least sees correct info
-        print("ℹ️ Building album from Discogs data (no Deezer audio)")
+        // Discogs found it but Deezer doesn't have a matching audio version —
+        // build a minimal Album from Discogs data so the user at least sees the correct cover/title.
+        print("ℹ️ Building album from Discogs data (no matching Deezer audio)")
         return buildDiscogsOnlyAlbum(from: topResult, artist: artist, albumTitle: albumTitle, year: year)
     }
 
     /// Parses a Discogs title like "Weird Al Yankovic - Poodle Hat"
-    /// into ("Weird Al Yankovic", "Poodle Hat")
+    /// into ("Weird Al Yankovic", "Poodle Hat"). Strips Discogs' disambiguation
+    /// markers from the artist (e.g. "McCartney*" or "Genesis (2)") so the
+    /// follow-up Deezer query isn't garbled.
     private func parseDiscogsTitle(_ title: String) -> (artist: String, album: String) {
         if title.contains(" - ") {
             let parts = title.components(separatedBy: " - ")
             if parts.count >= 2 {
-                let artist = parts[0].trimmingCharacters(in: .whitespaces)
+                let rawArtist = parts[0].trimmingCharacters(in: .whitespaces)
+                let artist = cleanDiscogsArtist(rawArtist)
                 let album  = parts[1...].joined(separator: " - ").trimmingCharacters(in: .whitespaces)
                 return (artist, album)
             }
         }
         return ("", title.trimmingCharacters(in: .whitespaces))
+    }
+
+    /// Strips Discogs disambiguation suffixes: trailing `*` and trailing
+    /// `(<digits>)` like "(2)", "(3)".
+    private func cleanDiscogsArtist(_ raw: String) -> String {
+        var out = raw
+        // Remove trailing " (N)" disambiguation
+        if let range = out.range(of: #"\s*\(\d+\)\s*$"#, options: .regularExpression) {
+            out.removeSubrange(range)
+        }
+        // Remove trailing asterisks
+        while out.hasSuffix("*") { out.removeLast() }
+        return out.trimmingCharacters(in: .whitespaces)
+    }
+
+    /// Sanity-check that a Deezer search result actually corresponds to the
+    /// album we asked about. Deezer happily returns its most-popular hit even
+    /// when the query is gibberish, so without this check we can end up
+    /// returning, e.g., *Band On The Run* in response to a query for *McCartney*.
+    private func deezerResultMatches(album: Album, expectedTitle: String, expectedArtist: String) -> Bool {
+        let expectedTitleTokens = significantTokens(expectedTitle)
+        let returnedTitleTokens = significantTokens(album.name)
+
+        if !expectedTitleTokens.isEmpty {
+            // At least one meaningful title token should overlap.
+            return !expectedTitleTokens.isDisjoint(with: returnedTitleTokens)
+        }
+
+        // No usable title tokens (very short / all stopwords) — fall back to artist match
+        let expectedArtistTokens = significantTokens(expectedArtist)
+        let returnedArtistTokens = significantTokens(album.artist)
+        return !expectedArtistTokens.isDisjoint(with: returnedArtistTokens)
+    }
+
+    private func significantTokens(_ s: String) -> Set<String> {
+        let stopwords: Set<String> = ["the", "and", "for", "with", "from", "feat",
+                                       "featuring", "vol", "pt", "ep", "lp"]
+        let lowered = s.lowercased()
+        let scrubbed = lowered.unicodeScalars
+            .map { CharacterSet.alphanumerics.contains($0) ? Character($0) : Character(" ") }
+        return Set(String(scrubbed)
+            .split(separator: " ")
+            .map(String.init)
+            .filter { $0.count >= 3 && !stopwords.contains($0) })
     }
 
     /// Builds a minimal Album from Discogs data when Deezer has no audio.
@@ -704,4 +977,80 @@ struct DeezerTracks: Codable { let data: [DeezerTrack] }
 struct DeezerTrack: Codable {
     let id: Int; let title: String; let duration: Int
     let preview: String; let rank: Int?
+}
+
+// MARK: - Gemini Models
+
+private struct GeminiResponse: Codable {
+    let candidates: [Candidate]
+    let usageMetadata: UsageMetadata?
+
+    struct Candidate: Codable {
+        // A truncated or blocked response can omit content entirely.
+        let content: Content?
+        let finishReason: String?
+        struct Content: Codable {
+            let parts: [Part]?
+            struct Part: Codable { let text: String? }
+        }
+    }
+
+    struct UsageMetadata: Codable {
+        let promptTokenCount: Int?
+        let candidatesTokenCount: Int?
+        /// Reasoning tokens — billed as output, and counted against maxOutputTokens.
+        let thoughtsTokenCount: Int?
+        let totalTokenCount: Int?
+    }
+}
+
+/// Token counts for a single Gemini call, kept alongside the identification so
+/// the cost of a scan can be logged next to the result it produced.
+private struct GeminiTokenUsage {
+    let prompt: Int
+    let thinking: Int
+    let output: Int
+    let total: Int
+
+    init(_ metadata: GeminiResponse.UsageMetadata) {
+        prompt = metadata.promptTokenCount ?? 0
+        thinking = metadata.thoughtsTokenCount ?? 0
+        output = metadata.candidatesTokenCount ?? 0
+        total = metadata.totalTokenCount ?? 0
+    }
+
+    var summary: String {
+        "prompt: \(prompt), thinking: \(thinking), output: \(output), total: \(total)"
+    }
+}
+
+/// The structured payload Gemini returns for a scanned cover, matching the
+/// responseSchema sent with the request.
+private struct GeminiIdentification: Codable {
+    let isAlbumPackaging: Bool
+    let hasReadableText: Bool
+    let visibleText: [String]
+    let candidates: [GeminiAlbumCandidate]
+
+    /// Candidates sorted by the model's own confidence, with empty entries dropped.
+    var rankedCandidates: [GeminiAlbumCandidate] {
+        candidates
+            .filter { !$0.searchQuery.isEmpty }
+            .sorted { $0.confidence > $1.confidence }
+    }
+}
+
+private struct GeminiAlbumCandidate: Codable {
+    let artist: String
+    let album: String
+    let confidence: Double
+    let identifiedFrom: String?
+
+    /// "Artist Album" — what we hand to Discogs/Deezer.
+    var searchQuery: String {
+        [artist, album]
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+    }
 }

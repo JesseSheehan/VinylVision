@@ -72,6 +72,7 @@ struct CameraView: View {
                 detectedRect: $detectedRect,
                 isCapturing: $isCapturing,
                 triggerLensToggle: $triggerLensToggle,  // ← new
+                autoPhotoEnabled: appState.autoPhotoEnabled,
                 onImageCaptured: { image in
                     Task { await handleCapturedImage(image) }
                 }
@@ -91,18 +92,42 @@ struct CameraView: View {
                     .padding(.top, 20)
 
                     Spacer()
+
+                    if appState.showAutoPhotoToggle {
+                        Button { toggleAutoPhoto() } label: {
+                            HStack(spacing: 5) {
+                                Image(systemName: appState.autoPhotoEnabled ? "bolt.fill" : "bolt.slash.fill")
+                                    .font(.system(size: 13, weight: .semibold))
+                                Text(appState.autoPhotoEnabled ? "AUTO" : "MANUAL")
+                                    .font(.system(size: 12, weight: .semibold))
+                            }
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .liquidGlass(in: Capsule(), interactive: true)
+                            .shadow(color: .black.opacity(0.4), radius: 4)
+                        }
+                        .padding(.trailing, 20)
+                        .padding(.top, 20)
+                    }
                 }
 
                 Spacer()
 
-                ViewfinderOverlay(detectionState: detectionState, confidence: confidence)
+                if detectionState == .capturing {
+                    CaptureSpinnerView()
+                        .transition(.scale(scale: 0.7).combined(with: .opacity))
+                } else {
+                    ViewfinderOverlay(detectionState: detectionState, confidence: confidence)
+                }
 
                 Spacer()
 
                 VStack(spacing: 16) {
                     statusLabel
 
-                    if detectionState == .detected || detectionState == .confirming {
+                    if appState.autoPhotoEnabled,
+                       detectionState == .detected || detectionState == .confirming {
                         ConfidenceBar(confidence: confidence).transition(.opacity)
                     }
 
@@ -322,6 +347,20 @@ struct CameraView: View {
         dismiss()
     }
 
+    private func toggleAutoPhoto() {
+        let newValue = !appState.autoPhotoEnabled
+        appState.autoPhotoEnabled = newValue
+        UserDefaults.standard.set(newValue, forKey: "autoPhotoEnabled")
+        // If turning auto back on while a rect is still framed, the user expects
+        // the countdown to start immediately on the next detected frame — that
+        // happens naturally because resetDetection clears hasDetectedRect.
+        if !newValue {
+            // Turning off: stop any in-flight countdown without losing the rect view
+            confidence = 0
+            if detectionState == .confirming { detectionState = .detected }
+        }
+    }
+
     private func dismissLowConfidence() {
         showLowConfidence = false
         lowConfidenceAlbum = nil
@@ -366,7 +405,10 @@ struct CameraView: View {
             appState.errorMessage = nil
         }
         do {
-            let result = try await AlbumRecognitionService.shared.recognizeAlbum(from: image)
+            let result = try await AlbumRecognitionService.shared.recognizeAlbum(
+                from: image,
+                useGemini: appState.useGeminiRecognition
+            )
             await MainActor.run {
                 appState.isLoadingAlbum = false
 
@@ -490,6 +532,65 @@ struct ConfidenceBar: View {
     }
 }
 
+// MARK: - Capture Spinner
+
+/// A swirling vinyl-record style spinner shown the moment the shutter fires
+/// and the recognition pipeline starts running.
+struct CaptureSpinnerView: View {
+    @State private var isSpinning = false
+    @State private var glowPulse = false
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(RadialGradient(
+                    colors: [.purple.opacity(glowPulse ? 0.55 : 0.2), .clear],
+                    center: .center, startRadius: 10, endRadius: 110
+                ))
+                .frame(width: 220, height: 220)
+                .blur(radius: 8)
+
+            Circle()
+                .trim(from: 0.0, to: 0.75)
+                .stroke(
+                    AngularGradient(
+                        colors: [.purple, .pink, .orange, .purple],
+                        center: .center
+                    ),
+                    style: StrokeStyle(lineWidth: 4, lineCap: .round)
+                )
+                .frame(width: 160, height: 160)
+                .rotationEffect(.degrees(isSpinning ? 360 : 0))
+
+            ZStack {
+                Circle().fill(.black).frame(width: 120, height: 120)
+                ForEach([0.85, 0.7, 0.55, 0.4], id: \.self) { s in
+                    Circle()
+                        .stroke(Color.white.opacity(0.10), lineWidth: 1)
+                        .frame(width: 120 * s, height: 120 * s)
+                }
+                Circle()
+                    .fill(LinearGradient(
+                        colors: [.purple, .pink],
+                        startPoint: .topLeading, endPoint: .bottomTrailing
+                    ))
+                    .frame(width: 32, height: 32)
+                Circle().fill(.black).frame(width: 6, height: 6)
+            }
+            .rotationEffect(.degrees(isSpinning ? 360 : 0))
+        }
+        .shadow(color: .purple.opacity(0.5), radius: 20)
+        .onAppear {
+            withAnimation(.linear(duration: 1.6).repeatForever(autoreverses: false)) {
+                isSpinning = true
+            }
+            withAnimation(.easeInOut(duration: 1.0).repeatForever(autoreverses: true)) {
+                glowPulse = true
+            }
+        }
+    }
+}
+
 // MARK: - LiveCameraView
 
 struct LiveCameraView: UIViewControllerRepresentable {
@@ -498,6 +599,7 @@ struct LiveCameraView: UIViewControllerRepresentable {
     @Binding var detectedRect: CGRect
     @Binding var isCapturing: Bool
     @Binding var triggerLensToggle: Bool   // ← new
+    var autoPhotoEnabled: Bool
     let onImageCaptured: (UIImage) -> Void
 
     func makeUIViewController(context: Context) -> CameraViewController {
@@ -506,14 +608,17 @@ struct LiveCameraView: UIViewControllerRepresentable {
         vc.onConfidenceChanged = { confidence = $0 }
         vc.onRectChanged       = { detectedRect = $0 }
         vc.onImageCaptured     = onImageCaptured
+        vc.autoPhotoEnabled    = autoPhotoEnabled
         return vc
     }
 
     func updateUIViewController(_ vc: CameraViewController, context: Context) {
+        vc.autoPhotoEnabled = autoPhotoEnabled
+
         if isCapturing && vc.canCapture {
             vc.captureCurrentFrame()
         }
-        
+
         // This fires every time triggerLensToggle flips
         if context.coordinator.lastLensToggle != triggerLensToggle {
             context.coordinator.lastLensToggle = triggerLensToggle
@@ -542,6 +647,10 @@ class CameraViewController: UIViewController {
     var onImageCaptured: ((UIImage) -> Void)?
     var canCapture = false
 
+    // When false, the confidence timer is suppressed and the user must tap
+    // the shutter button to capture.
+    var autoPhotoEnabled = true
+
     // Capture session
     private var captureSession: AVCaptureSession?
     private var previewLayer: AVCaptureVideoPreviewLayer?
@@ -563,9 +672,13 @@ class CameraViewController: UIViewController {
     private var currentZoomFactor: CGFloat = 1.0
     private var lastPinchZoomFactor: CGFloat = 1.0
 
+    // Tap-to-focus indicator, removed from the view when its animation finishes
+    private weak var focusIndicator: UIView?
+
     // Haptics
     private let impactFeedback  = UIImpactFeedbackGenerator(style: .medium)
     private let successFeedback = UINotificationFeedbackGenerator()
+    private let focusFeedback   = UIImpactFeedbackGenerator(style: .light)
 
     func toggleCameraLens() {
         // Check if ultra-wide is available on this device
@@ -668,10 +781,89 @@ class CameraViewController: UIViewController {
         DispatchQueue.global(qos: .userInitiated).async { session.startRunning() }
 
         setupPinchZoom()
+        setupTapToFocus()
 
         canCapture = true
         impactFeedback.prepare()
         successFeedback.prepare()
+        focusFeedback.prepare()
+    }
+
+    // MARK: - Tap to Focus
+
+    private func setupTapToFocus() {
+        let tap = UITapGestureRecognizer(target: self, action: #selector(handleFocusTap(_:)))
+        view.addGestureRecognizer(tap)
+    }
+
+    @objc private func handleFocusTap(_ gesture: UITapGestureRecognizer) {
+        guard let previewLayer,
+              let device = (captureSession?.inputs.first as? AVCaptureDeviceInput)?.device else { return }
+
+        let layerPoint = gesture.location(in: view)
+        // Preview coordinates → the camera's own normalized coordinate space,
+        // which accounts for videoGravity cropping and device orientation.
+        let devicePoint = previewLayer.captureDevicePointConverted(fromLayerPoint: layerPoint)
+
+        do {
+            try device.lockForConfiguration()
+
+            if device.isFocusPointOfInterestSupported, device.isFocusModeSupported(.autoFocus) {
+                device.focusPointOfInterest = devicePoint
+                device.focusMode = .autoFocus
+            }
+
+            // Metering the same spot matters as much as focus here — album sleeves
+            // are often shot against a much brighter or darker background.
+            if device.isExposurePointOfInterestSupported, device.isExposureModeSupported(.continuousAutoExposure) {
+                device.exposurePointOfInterest = devicePoint
+                device.exposureMode = .continuousAutoExposure
+            }
+
+            device.unlockForConfiguration()
+        } catch {
+            print("❌ Focus error: \(error)")
+            return
+        }
+
+        focusFeedback.impactOccurred()
+        showFocusIndicator(at: layerPoint)
+
+        // Frames go soft while the lens racks. Restart detection so an in-flight
+        // countdown can't fire the shutter mid-refocus — same reasoning as pinch.
+        resetDetection()
+    }
+
+    private func showFocusIndicator(at point: CGPoint) {
+        focusIndicator?.removeFromSuperview()
+
+        let box = UIView(frame: CGRect(x: 0, y: 0, width: 76, height: 76))
+        box.center = point
+        box.backgroundColor = .clear
+        box.layer.borderColor = UIColor.systemYellow.cgColor
+        box.layer.borderWidth = 1.5
+        box.layer.cornerRadius = 6
+        box.layer.shadowColor = UIColor.black.cgColor
+        box.layer.shadowOpacity = 0.4
+        box.layer.shadowRadius = 3
+        box.layer.shadowOffset = .zero
+        box.isUserInteractionEnabled = false
+        box.alpha = 0
+        box.transform = CGAffineTransform(scaleX: 1.4, y: 1.4)
+
+        view.addSubview(box)
+        focusIndicator = box
+
+        UIView.animate(withDuration: 0.18, delay: 0, options: [.curveEaseOut]) {
+            box.alpha = 1
+            box.transform = .identity
+        } completion: { _ in
+            UIView.animate(withDuration: 0.35, delay: 0.6, options: [.curveEaseIn]) {
+                box.alpha = 0
+            } completion: { _ in
+                box.removeFromSuperview()
+            }
+        }
     }
 
     // MARK: - Pinch to Zoom
@@ -687,6 +879,9 @@ class CameraViewController: UIViewController {
         switch gesture.state {
         case .began:
             lastPinchZoomFactor = currentZoomFactor
+            // While the user is actively framing, halt auto-capture so we don't
+            // grab the photo mid-pinch. Detection resumes naturally on the next frame.
+            resetDetection()
 
         case .changed:
             let min: CGFloat = 1.0
@@ -727,7 +922,7 @@ class CameraViewController: UIViewController {
     private func startConfidenceTimer() {
         captureTimer?.invalidate()
         currentConfidence = 0
-        let totalTime: Double = 2.0
+        let totalTime: Double = 4.0
         let interval: Double = 0.05
         var elapsed: Double = 0
 
@@ -796,7 +991,9 @@ extension CameraViewController: AVCaptureVideoDataOutputSampleBufferDelegate {
                     self.onStateChanged?(.detected)
                     self.onRectChanged?(best.boundingBox)
                 }
-                DispatchQueue.main.async { self.startConfidenceTimer() }
+                if self.autoPhotoEnabled {
+                    DispatchQueue.main.async { self.startConfidenceTimer() }
+                }
             }
         }
 

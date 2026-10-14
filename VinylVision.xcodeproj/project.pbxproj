@@ -10,11 +10,6 @@
 		2F01CA852FD9FA730082261B /* .gitignore in Resources */ = {isa = PBXBuildFile; fileRef = 2F01CA662FD9FA730082261B /* .gitignore */; };
 		2F27E27F2FE9A35800462DE7 /* VinylVisionTestImage-iOS-Default-1024x1024@1x.png in Resources */ = {isa = PBXBuildFile; fileRef = 2F27E27E2FE9A35800462DE7 /* VinylVisionTestImage-iOS-Default-1024x1024@1x.png */; };
 		2FF391D72FB972140044DE65 /* RealityKitContent in Frameworks */ = {isa = PBXBuildFile; productRef = 2FF391D62FB972140044DE65 /* RealityKitContent */; };
-		2FF392002FB978FD0044DE65 /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2FF391FF2FB978FD0044DE65 /* SwiftUI.framework */; };
-		2FF392022FB979120044DE65 /* ARKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2FF392012FB979120044DE65 /* ARKit.framework */; };
-		2FF392042FB9791A0044DE65 /* AVFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2FF392032FB9791A0044DE65 /* AVFoundation.framework */; };
-		2FF392062FB979200044DE65 /* Vision.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2FF392052FB979200044DE65 /* Vision.framework */; };
-		2FF392082FB9792A0044DE65 /* RealityKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2FF392072FB9792A0044DE65 /* RealityKit.framework */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -22,11 +17,6 @@
 		2F27E27E2FE9A35800462DE7 /* VinylVisionTestImage-iOS-Default-1024x1024@1x.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "VinylVisionTestImage-iOS-Default-1024x1024@1x.png"; sourceTree = "<group>"; };
 		2FF391D12FB972140044DE65 /* VinylVision.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = VinylVision.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		2FF391D52FB972140044DE65 /* RealityKitContent */ = {isa = PBXFileReference; lastKnownFileType = wrapper; path = RealityKitContent; sourceTree = "<group>"; };
-		2FF391FF2FB978FD0044DE65 /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.5.sdk/System/Library/Frameworks/SwiftUI.framework; sourceTree = DEVELOPER_DIR; };
-		2FF392012FB979120044DE65 /* ARKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = ARKit.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.5.sdk/System/Library/Frameworks/ARKit.framework; sourceTree = DEVELOPER_DIR; };
-		2FF392032FB9791A0044DE65 /* AVFoundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVFoundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.5.sdk/System/Library/Frameworks/AVFoundation.framework; sourceTree = DEVELOPER_DIR; };
-		2FF392052FB979200044DE65 /* Vision.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Vision.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.5.sdk/System/Library/Frameworks/Vision.framework; sourceTree = DEVELOPER_DIR; };
-		2FF392072FB9792A0044DE65 /* RealityKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = RealityKit.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.5.sdk/System/Library/Frameworks/RealityKit.framework; sourceTree = DEVELOPER_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -55,11 +45,6 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				2FF392082FB9792A0044DE65 /* RealityKit.framework in Frameworks */,
-				2FF392042FB9791A0044DE65 /* AVFoundation.framework in Frameworks */,
-				2FF392022FB979120044DE65 /* ARKit.framework in Frameworks */,
-				2FF392002FB978FD0044DE65 /* SwiftUI.framework in Frameworks */,
-				2FF392062FB979200044DE65 /* Vision.framework in Frameworks */,
 				2FF391D72FB972140044DE65 /* RealityKitContent in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -72,7 +57,6 @@
 			children = (
 				2FF391D32FB972140044DE65 /* VinylVision */,
 				2FF391D42FB972140044DE65 /* Packages */,
-				2FF391FE2FB978FD0044DE65 /* Frameworks */,
 				2FF391D22FB972140044DE65 /* Products */,
 				2F01CA662FD9FA730082261B /* .gitignore */,
 				2F27E27E2FE9A35800462DE7 /* VinylVisionTestImage-iOS-Default-1024x1024@1x.png */,
@@ -93,18 +77,6 @@
 				2FF391D52FB972140044DE65 /* RealityKitContent */,
 			);
 			path = Packages;
-			sourceTree = "<group>";
-		};
-		2FF391FE2FB978FD0044DE65 /* Frameworks */ = {
-			isa = PBXGroup;
-			children = (
-				2FF392072FB9792A0044DE65 /* RealityKit.framework */,
-				2FF392052FB979200044DE65 /* Vision.framework */,
-				2FF392032FB9791A0044DE65 /* AVFoundation.framework */,
-				2FF392012FB979120044DE65 /* ARKit.framework */,
-				2FF391FF2FB978FD0044DE65 /* SwiftUI.framework */,
-			);
-			name = Frameworks;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
