@@ -20,6 +20,7 @@ class AppState {
     var playMostPopular: Bool = false
     var preferredStreamingService: StreamingService = .appleMusic
     var useGeminiRecognition: Bool = false
+    var useLensRecognition: Bool = false
     var autoPhotoEnabled: Bool = true
     var showAutoPhotoToggle: Bool = true
     var recentAlbums: [Album] = []
@@ -34,6 +35,7 @@ class AppState {
         }
         playMostPopular = defaults.bool(forKey: "playMostPopular")
         useGeminiRecognition = defaults.bool(forKey: "useGeminiRecognition")
+        useLensRecognition = defaults.bool(forKey: "useLensRecognition")
         if defaults.object(forKey: "autoPhotoEnabled") != nil {
             autoPhotoEnabled = defaults.bool(forKey: "autoPhotoEnabled")
         }

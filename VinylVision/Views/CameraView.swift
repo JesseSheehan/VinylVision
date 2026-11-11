@@ -54,7 +54,8 @@ struct CameraView: View {
     @State private var showRetry = false
     @State private var retryMessage = ""
     @State private var cameraKey = UUID()
-    @State private var isUltraWide = false
+    /// Starts on the 0.5x lens when the device has one.
+    @State private var isUltraWide = AVCaptureDevice.default(.builtInUltraWideCamera, for: .video, position: .back) != nil
     @State private var triggerLensToggle = false  // ← flipping this triggers the switch
     @State private var showLowConfidence = false
     @State private var lowConfidenceAlbum: Album?
@@ -72,6 +73,7 @@ struct CameraView: View {
                 detectedRect: $detectedRect,
                 isCapturing: $isCapturing,
                 triggerLensToggle: $triggerLensToggle,  // ← new
+                startsUltraWide: isUltraWide,
                 autoPhotoEnabled: appState.autoPhotoEnabled,
                 onImageCaptured: { image in
                     Task { await handleCapturedImage(image) }
@@ -118,7 +120,10 @@ struct CameraView: View {
                     CaptureSpinnerView()
                         .transition(.scale(scale: 0.7).combined(with: .opacity))
                 } else {
+                    // Fixed guide while searching; once an album is found, the live
+                    // outline drawn by CameraViewController traces it instead.
                     ViewfinderOverlay(detectionState: detectionState, confidence: confidence)
+                        .opacity(detectionState == .searching ? 1 : 0)
                 }
 
                 Spacer()
@@ -407,7 +412,8 @@ struct CameraView: View {
         do {
             let result = try await AlbumRecognitionService.shared.recognizeAlbum(
                 from: image,
-                useGemini: appState.useGeminiRecognition
+                useGemini: appState.useGeminiRecognition,
+                useLens: appState.useLensRecognition
             )
             await MainActor.run {
                 appState.isLoadingAlbum = false
@@ -599,6 +605,9 @@ struct LiveCameraView: UIViewControllerRepresentable {
     @Binding var detectedRect: CGRect
     @Binding var isCapturing: Bool
     @Binding var triggerLensToggle: Bool   // ← new
+    /// Lens to open on. Read once when the camera is created, so a retry
+    /// reopens on whichever lens the user last picked.
+    var startsUltraWide: Bool
     var autoPhotoEnabled: Bool
     let onImageCaptured: (UIImage) -> Void
 
@@ -609,6 +618,7 @@ struct LiveCameraView: UIViewControllerRepresentable {
         vc.onRectChanged       = { detectedRect = $0 }
         vc.onImageCaptured     = onImageCaptured
         vc.autoPhotoEnabled    = autoPhotoEnabled
+        vc.startsUltraWide     = startsUltraWide
         return vc
     }
 
@@ -627,11 +637,15 @@ struct LiveCameraView: UIViewControllerRepresentable {
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator()
+        // Seed with the current value: a retry recreates the camera (and this
+        // coordinator), and a stale `false` would read as a fresh toggle and
+        // flip the lens the camera was just opened on.
+        Coordinator(lastLensToggle: triggerLensToggle)
     }
 
     class Coordinator {
-        var lastLensToggle = false
+        var lastLensToggle: Bool
+        init(lastLensToggle: Bool) { self.lastLensToggle = lastLensToggle }
     }
 }
 
@@ -658,6 +672,8 @@ class CameraViewController: UIViewController {
     
     // Camera toggle
     private var isUsingUltraWide = false
+    /// Set before the view loads; falls back to 1x if there's no ultra-wide.
+    var startsUltraWide = false
 
     // Detection state
     private var currentConfidence: Double = 0
@@ -665,12 +681,27 @@ class CameraViewController: UIViewController {
     private var captureTimer: Timer?
     private var hasCaptured = false
     private var missedFrameCount = 0
-    private let missedFrameTolerance = 8
-    private var lastDetectedObservation: VNRectangleObservation?
+    /// Checks (≈10 a second) without the album before the countdown resets.
+    private let missedFrameTolerance = 4
+    private var frameCounter = 0
+    /// The album being followed, smoothed across frames.
+    private var trackedQuad: DetectedQuad?
+    /// Consecutive frames where a *different* rectangle was the best candidate.
+    private var jumpFrameCount = 0
+    private let jumpFrameTolerance = 4
+
+    /// Where to look for the album, in Vision's normalized lower-left coordinates.
+    /// Starts as a central guess and is refined from the preview's real geometry.
+    private var detectionRegion = CGRect(x: 0.15, y: 0.15, width: 0.7, height: 0.7)
+    private var hasMeasuredDetectionRegion = false
+    private var lastMissLog = Date.distantPast
 
     // Zoom state
     private var currentZoomFactor: CGFloat = 1.0
     private var lastPinchZoomFactor: CGFloat = 1.0
+
+    // Outline traced around the detected album, over the camera preview
+    private let outlineLayer = CAShapeLayer()
 
     // Tap-to-focus indicator, removed from the view when its animation finishes
     private weak var focusIndicator: UIView?
@@ -735,6 +766,30 @@ class CameraViewController: UIViewController {
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         previewLayer?.frame = view.bounds
+        outlineLayer.frame = view.bounds
+        refreshDetectionRegion()
+    }
+
+    /// Converts the central part of the screen into the camera's coordinates, so
+    /// detection only considers what's inside it. Vision only reports rectangles
+    /// that fit *entirely* inside, so this spans nearly the full width (an album
+    /// held close still fits) but cuts off the top and bottom of the screen.
+    private func refreshDetectionRegion() {
+        guard let previewLayer, view.bounds.width > 0 else { return }
+        let width = view.bounds.width * 0.95
+        let height = min(width * 1.3, view.bounds.height * 0.7)
+        let guide = CGRect(x: view.bounds.midX - width / 2, y: view.bounds.midY - height / 2,
+                           width: width, height: height)
+
+        // Device coordinates have a top-left origin; Vision's is bottom-left.
+        let device = previewLayer.metadataOutputRectConverted(fromLayerRect: guide)
+        let region = CGRect(x: device.minX, y: 1 - device.maxY, width: device.width, height: device.height)
+            .intersection(CGRect(x: 0, y: 0, width: 1, height: 1))
+        // Before the first frame arrives the preview has no geometry to convert with.
+        guard !region.isNull, region.width > 0.05, region.height > 0.05 else { return }
+
+        detectionRegion = region
+        hasMeasuredDetectionRegion = true
     }
 
     // MARK: - Permissions
@@ -756,10 +811,15 @@ class CameraViewController: UIViewController {
         let session = AVCaptureSession()
         session.sessionPreset = .photo
 
-        guard let camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back),
+        let ultraWide = startsUltraWide
+            ? AVCaptureDevice.default(.builtInUltraWideCamera, for: .video, position: .back)
+            : nil
+        guard let camera = ultraWide ?? AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back),
               let input = try? AVCaptureDeviceInput(device: camera),
               session.canAddInput(input) else { return }
         session.addInput(input)
+        isUsingUltraWide = ultraWide != nil
+        print(isUsingUltraWide ? "📷 Starting on ultra-wide (0.5x)" : "📷 Starting on standard (1x)")
 
         let photo = AVCapturePhotoOutput()
         if session.canAddOutput(photo) { session.addOutput(photo); self.photoOutput = photo }
@@ -777,6 +837,7 @@ class CameraViewController: UIViewController {
         preview.frame = view.bounds
         view.layer.addSublayer(preview)
         self.previewLayer = preview
+        setupOutlineLayer()
 
         DispatchQueue.global(qos: .userInitiated).async { session.startRunning() }
 
@@ -908,6 +969,7 @@ class CameraViewController: UIViewController {
         guard !hasCaptured else { return }
         hasCaptured = true
         captureTimer?.invalidate()
+        hideOutline()
         takePhoto()
     }
 
@@ -922,7 +984,10 @@ class CameraViewController: UIViewController {
     private func startConfidenceTimer() {
         captureTimer?.invalidate()
         currentConfidence = 0
-        let totalTime: Double = 4.0
+        let totalTime: Double = 2.0
+        // Fire slightly before the bar fills — the last stretch of a countdown
+        // feels longest, and the frame is already steady by then.
+        let fireAt: Double = 0.9
         let interval: Double = 0.05
         var elapsed: Double = 0
 
@@ -933,13 +998,17 @@ class CameraViewController: UIViewController {
             DispatchQueue.main.async {
                 self.onConfidenceChanged?(self.currentConfidence)
                 self.onStateChanged?(self.currentConfidence >= 0.7 ? .confirming : .detected)
+                self.setOutlineColor(self.currentConfidence >= 0.7 ? .systemGreen : .systemYellow)
             }
-            if self.currentConfidence >= 1.0 {
+            if self.currentConfidence >= fireAt {
                 timer.invalidate()
                 self.hasCaptured = true
+                self.currentConfidence = 1.0
                 DispatchQueue.main.async {
+                    self.onConfidenceChanged?(1.0)
                     self.successFeedback.notificationOccurred(.success)
                     self.onStateChanged?(.capturing)
+                    self.hideOutline()
                 }
                 self.takePhoto()
             }
@@ -951,25 +1020,201 @@ class CameraViewController: UIViewController {
         currentConfidence = 0
         hasDetectedRect = false
         missedFrameCount = 0
+        trackedQuad = nil
+        jumpFrameCount = 0
         DispatchQueue.main.async {
             self.onConfidenceChanged?(0)
             self.onStateChanged?(.searching)
+            self.hideOutline()
         }
+    }
+
+    /// Throttled console note for frames where nothing qualified, naming which
+    /// filter rejected the object and by how much, so thresholds can be tuned.
+    private func logDetectionMiss(_ quad: DetectedQuad?, minimumArea: CGFloat,
+                                  pixelWidth: CGFloat, pixelHeight: CGFloat) {
+        guard Date().timeIntervalSince(lastMissLog) > 1 else { return }
+        lastMissLog = Date()
+        guard let quad else {
+            print("🔲 No album-shaped object found")
+            return
+        }
+        var reasons: [String] = []
+        if quad.area <= minimumArea {
+            reasons.append("too small (\(Int(quad.area / minimumArea * 100))% of the minimum size)")
+        }
+        let squareness = quad.squareness(pixelWidth: pixelWidth, pixelHeight: pixelHeight)
+        if squareness < 0.55 {
+            reasons.append(String(format: "not square enough (%.2f, needs 0.55)", squareness))
+        }
+        print("🔲 Object rejected: \(reasons.joined(separator: ", "))")
+    }
+
+    // MARK: - Detected Outline
+
+    private func setupOutlineLayer() {
+        outlineLayer.frame = view.bounds
+        outlineLayer.fillColor = UIColor.systemYellow.withAlphaComponent(0.15).cgColor
+        outlineLayer.strokeColor = UIColor.systemYellow.cgColor
+        outlineLayer.lineWidth = 4
+        outlineLayer.lineJoin = .round
+        outlineLayer.shadowColor = UIColor.systemYellow.cgColor
+        outlineLayer.shadowOpacity = 0.8
+        outlineLayer.shadowRadius = 4
+        outlineLayer.shadowOffset = .zero
+        outlineLayer.opacity = 0
+        view.layer.addSublayer(outlineLayer)
+    }
+
+    /// Traces the detected rectangle's four corners on screen. Call on main.
+    private func showOutline(for quad: DetectedQuad) {
+        guard let previewLayer else { return }
+
+        // Vision corners are normalized with a bottom-left origin, in the same
+        // sensor orientation as the camera's device coordinates (top-left origin).
+        // The preview layer then accounts for rotation and aspect-fill cropping.
+        let corners = quad.corners
+            .map { previewLayer.layerPointConverted(fromCaptureDevicePoint: CGPoint(x: $0.x, y: 1 - $0.y)) }
+
+        let path = UIBezierPath()
+        path.move(to: corners[0])
+        corners.dropFirst().forEach { path.addLine(to: $0) }
+        path.close()
+
+        // A short implicit animation smooths frame-to-frame jitter in the corners.
+        CATransaction.begin()
+        CATransaction.setAnimationDuration(0.1)
+        outlineLayer.path = path.cgPath
+        outlineLayer.opacity = 1
+        CATransaction.commit()
+    }
+
+    private func setOutlineColor(_ color: UIColor) {
+        outlineLayer.strokeColor = color.cgColor
+        outlineLayer.fillColor = color.withAlphaComponent(0.15).cgColor
+        outlineLayer.shadowColor = color.cgColor
+    }
+
+    private func hideOutline() {
+        outlineLayer.opacity = 0
+        setOutlineColor(.systemYellow)
     }
 }
 
 // MARK: - Rectangle Detection
+
+/// A detected rectangle's corners, normalized to the full camera frame with
+/// Vision's lower-left origin.
+struct DetectedQuad {
+    var topLeft: CGPoint
+    var topRight: CGPoint
+    var bottomRight: CGPoint
+    var bottomLeft: CGPoint
+
+    /// Maps an observation made inside `region` back to full-frame coordinates —
+    /// Vision reports results relative to the request's region of interest.
+    init(_ observation: VNRectangleObservation, in region: CGRect) {
+        func toFrame(_ p: CGPoint) -> CGPoint {
+            CGPoint(x: region.minX + p.x * region.width, y: region.minY + p.y * region.height)
+        }
+        topLeft = toFrame(observation.topLeft)
+        topRight = toFrame(observation.topRight)
+        bottomRight = toFrame(observation.bottomRight)
+        bottomLeft = toFrame(observation.bottomLeft)
+    }
+
+    var corners: [CGPoint] { [topLeft, topRight, bottomRight, bottomLeft] }
+
+    var boundingBox: CGRect {
+        let xs = corners.map(\.x), ys = corners.map(\.y)
+        guard let minX = xs.min(), let maxX = xs.max(), let minY = ys.min(), let maxY = ys.max() else { return .zero }
+        return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+    }
+
+    var area: CGFloat { boundingBox.width * boundingBox.height }
+
+    /// Sleeves, CD cases and cassette J-cards are all fairly square. Measured in
+    /// pixels, since normalized coordinates stretch with the frame's aspect ratio.
+    func isRoughlySquare(pixelWidth: CGFloat, pixelHeight: CGFloat) -> Bool {
+        squareness(pixelWidth: pixelWidth, pixelHeight: pixelHeight) >= 0.55
+    }
+
+    /// Short side ÷ long side: 1 = square, 0.5 = twice as long as it is wide.
+    func squareness(pixelWidth: CGFloat, pixelHeight: CGFloat) -> CGFloat {
+        func length(_ a: CGPoint, _ b: CGPoint) -> CGFloat {
+            hypot((a.x - b.x) * pixelWidth, (a.y - b.y) * pixelHeight)
+        }
+        let width = (length(topLeft, topRight) + length(bottomLeft, bottomRight)) / 2
+        let height = (length(topLeft, bottomLeft) + length(topRight, bottomRight)) / 2
+        guard width > 0, height > 0 else { return 0 }
+        return min(width, height) / max(width, height)
+    }
+
+    /// Moves `amount` of the way toward `other` — damps per-frame corner jitter.
+    func blended(toward other: DetectedQuad, amount t: CGFloat) -> DetectedQuad {
+        func mix(_ a: CGPoint, _ b: CGPoint) -> CGPoint {
+            CGPoint(x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t)
+        }
+        var out = self
+        out.topLeft = mix(topLeft, other.topLeft)
+        out.topRight = mix(topRight, other.topRight)
+        out.bottomRight = mix(bottomRight, other.bottomRight)
+        out.bottomLeft = mix(bottomLeft, other.bottomLeft)
+        return out
+    }
+
+    /// Intersection-over-union of the two bounding boxes: 1 = same place, 0 = no overlap.
+    func overlap(with other: DetectedQuad) -> CGFloat {
+        let a = boundingBox, b = other.boundingBox
+        let inter = a.intersection(b)
+        guard !inter.isNull else { return 0 }
+        let i = inter.width * inter.height
+        let union = a.width * a.height + b.width * b.height - i
+        return union > 0 ? i / union : 0
+    }
+}
 
 extension CameraViewController: AVCaptureVideoDataOutputSampleBufferDelegate {
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
         guard !hasCaptured,
               let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
 
-        let request = VNDetectRectanglesRequest { [weak self] request, _ in
+        // The document detector is a neural network; ~10 checks a second is
+        // plenty for framing and keeps the phone cool.
+        frameCounter += 1
+        guard frameCounter % 3 == 0 else { return }
+        let pixelWidth = CGFloat(CVPixelBufferGetWidth(pixelBuffer))
+        let pixelHeight = CGFloat(CVPixelBufferGetHeight(pixelBuffer))
+
+        // Size is judged against the search area, which is defined in screen
+        // terms — so the same threshold works on both lenses. An album needs to
+        // fill about a fifth of the area (roughly two-thirds of the brackets).
+        let region = detectionRegion
+        let minimumArea = region.width * region.height * 0.2
+        if !hasMeasuredDetectionRegion {
+            DispatchQueue.main.async { self.refreshDetectionRegion() }
+        }
+
+        // Document segmentation is the ML detector behind the iPhone's document
+        // scanner. It recognises a flat rectangular object as a whole, so unlike
+        // edge-tracing rectangle detection it copes with fingers over the edges,
+        // busy artwork and cluttered backgrounds.
+        let request = VNDetectDocumentSegmentationRequest { [weak self] request, _ in
             guard let self else { return }
 
-            guard let results = request.results as? [VNRectangleObservation],
-                  let best = results.first else {
+            let fullFrame = CGRect(x: 0, y: 0, width: 1, height: 1)
+            let found = (request.results as? [VNRectangleObservation] ?? [])
+                .map { DetectedQuad($0, in: fullFrame) }
+            let quads = found
+                .filter { $0.area > minimumArea && $0.isRoughlySquare(pixelWidth: pixelWidth, pixelHeight: pixelHeight) }
+
+            // The sleeve's outer edge is the biggest rectangle covering the middle
+            // of the guide; smaller ones are artwork panels or text boxes inside it.
+            let center = CGPoint(x: region.midX, y: region.midY)
+            let centred = quads.filter { $0.boundingBox.contains(center) }
+            guard let candidate = (centred.isEmpty ? quads : centred).max(by: { $0.area < $1.area }) else {
+                self.logDetectionMiss(found.max(by: { $0.area < $1.area }), minimumArea: minimumArea,
+                                      pixelWidth: pixelWidth, pixelHeight: pixelHeight)
                 self.missedFrameCount += 1
                 if self.missedFrameCount >= self.missedFrameTolerance && self.hasDetectedRect {
                     self.hasDetectedRect = false
@@ -977,31 +1222,48 @@ extension CameraViewController: AVCaptureVideoDataOutputSampleBufferDelegate {
                 }
                 return
             }
-
             self.missedFrameCount = 0
-            let area = best.boundingBox.width * best.boundingBox.height
-            guard area > 0.15 else { self.missedFrameCount += 1; return }
 
-            self.lastDetectedObservation = best
+            var restartCountdown = false
+            if let tracked = self.trackedQuad {
+                if tracked.overlap(with: candidate) > 0.5 {
+                    // Same album: follow it smoothly.
+                    self.trackedQuad = tracked.blended(toward: candidate, amount: 0.4)
+                    self.jumpFrameCount = 0
+                } else {
+                    // A different rectangle. Only switch once it has held for a few
+                    // frames, so one-frame misdetections don't yank the outline away.
+                    self.jumpFrameCount += 1
+                    guard self.jumpFrameCount >= self.jumpFrameTolerance else { return }
+                    self.trackedQuad = candidate
+                    self.jumpFrameCount = 0
+                    restartCountdown = true
+                }
+            } else {
+                self.trackedQuad = candidate
+            }
+
+            guard let quad = self.trackedQuad else { return }
+            DispatchQueue.main.async {
+                guard !self.hasCaptured else { return }
+                self.showOutline(for: quad)
+            }
 
             if !self.hasDetectedRect {
                 self.hasDetectedRect = true
                 DispatchQueue.main.async {
                     self.impactFeedback.impactOccurred()
                     self.onStateChanged?(.detected)
-                    self.onRectChanged?(best.boundingBox)
+                    self.onRectChanged?(quad.boundingBox)
                 }
-                if self.autoPhotoEnabled {
-                    DispatchQueue.main.async { self.startConfidenceTimer() }
-                }
+                restartCountdown = true
+            }
+
+            // A new object deserves its own full countdown.
+            if restartCountdown && self.autoPhotoEnabled {
+                DispatchQueue.main.async { self.startConfidenceTimer() }
             }
         }
-
-        request.minimumAspectRatio  = 0.3
-        request.maximumAspectRatio  = 1.0
-        request.minimumSize         = 0.12
-        request.maximumObservations = 1
-        request.minimumConfidence   = 0.6
 
         try? VNImageRequestHandler(cvPixelBuffer: pixelBuffer, options: [:]).perform([request])
     }
@@ -1024,12 +1286,12 @@ extension CameraViewController: AVCapturePhotoCaptureDelegate {
     }
 
     private func cropToDetectedRect(image: UIImage) -> UIImage? {
-        guard let observation = lastDetectedObservation,
+        guard let quad = trackedQuad,
               let cgImage = image.cgImage else { return nil }
 
         let W = CGFloat(cgImage.width)
         let H = CGFloat(cgImage.height)
-        let bb = observation.boundingBox
+        let bb = quad.boundingBox
 
         let cropX = bb.minX * W
         let cropY = (1 - bb.maxY) * H

@@ -11,6 +11,7 @@ struct SettingsView: View {
     @AppStorage("playMostPopular") private var playMostPopular = false
     @AppStorage("preferredStreamingService") private var preferredServiceRaw = StreamingService.appleMusic.rawValue
     @AppStorage("useGeminiRecognition") private var useGeminiRecognition = false
+    @AppStorage("useLensRecognition") private var useLensRecognition = false
     @AppStorage("autoPhotoEnabled") private var autoPhotoEnabled = true
     @AppStorage("showAutoPhotoToggle") private var showAutoPhotoToggle = true
     
@@ -39,11 +40,18 @@ struct SettingsView: View {
                 Toggle("Use Gemini AI", isOn: $useGeminiRecognition)
                     .onChange(of: useGeminiRecognition) { _, newValue in
                         appState.useGeminiRecognition = newValue
+                        // Only one recognizer runs per scan.
+                        if newValue { useLensRecognition = false }
+                    }
+                Toggle("Use Google Lens", isOn: $useLensRecognition)
+                    .onChange(of: useLensRecognition) { _, newValue in
+                        appState.useLensRecognition = newValue
+                        if newValue { useGeminiRecognition = false }
                     }
             } header: {
                 Text("Recognition")
             } footer: {
-                Text("When on, identify scanned albums with Gemini 2.5 Flash instead of OCR. Token usage is printed to the Xcode console.")
+                Text("Gemini identifies albums with Gemini 2.5 Flash; Google Lens matches the photo against images on the web via SerpApi. With both off, albums are identified with Google Cloud Vision and OCR. Usage is printed to the Xcode console.")
             }
 
             Section {
@@ -111,6 +119,7 @@ struct SettingsView: View {
             appState.autoPlay = autoPlay
             appState.playMostPopular = playMostPopular
             appState.useGeminiRecognition = useGeminiRecognition
+            appState.useLensRecognition = useLensRecognition
             appState.autoPhotoEnabled = autoPhotoEnabled
             appState.showAutoPhotoToggle = showAutoPhotoToggle
             if let service = StreamingService(rawValue: preferredServiceRaw) {
